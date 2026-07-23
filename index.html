@@ -1,0 +1,118 @@
+// server.js — Бэкенд-сервер Relay с вынесенным токеном и авторизацией
+const express = require('express');
+const session = require('express-session');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// 🔒 СЕКРЕТНЫЙ ТОКЕН ЯНДЕКСА (Хранится ТОЛЬКО на сервере, F12 до него не доберется)
+const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN || "y0__wgBEMa2sf0IGP_1RSCBtIGxGCTcqP3i5Xi6F-JXhjOgxxUYVhg3";
+const YANDEX_API_BASE = "https://cloud-api.yandex.net";
+
+// Имитация БД пользователей (в продакшене используйте PostgreSQL/MongoDB)
+const usersDB = new Map();
+
+app.use(cors());
+app.use(express.json({ limit: '25mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.use(session({
+  secret: 'relay-super-secret-key-change-it',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
+}));
+
+// --- Middleware проверки авторизации ---
+function authRequired(req, res, next) {
+  if (req.session && req.session.user) {
+    return next();
+  }
+  return res.status(401).json({ error: "Unauthorized" });
+}
+
+// --- Роуты авторизации ---
+app.post('/api/auth/register', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Заполните все поля" });
+  
+  const cleanUser = username.trim().toLowerCase();
+  if (usersDB.has(cleanUser)) return res.status(400).json({ error: "Пользователь уже существует" });
+
+  usersDB.set(cleanUser, { username: cleanUser, password }); // В реальном проекте хэшируйте bcrypt
+  req.session.user = cleanUser;
+  res.json({ success: true, username: cleanUser });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  const cleanUser = (username || '').trim().toLowerCase();
+  const user = usersDB.get(cleanUser);
+
+  if (!user || user.password !== password) {
+    return res.status(401).json({ error: "Неверный логин или пароль" });
+  }
+
+  req.session.user = cleanUser;
+  res.json({ success: true, username: cleanUser });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (req.session && req.session.user) {
+    res.json({ authenticated: true, username: req.session.user });
+  } else {
+    res.json({ authenticated: false });
+  }
+});
+
+// --- Безопасный Прокси к Яндекс Диску ---
+app.all('/api/storage/*', authRequired, async (req, res) => {
+  try {
+    const targetPath = req.params[0];
+    const isUpload = req.method === 'PUT' || req.query.type === 'upload';
+    
+    const endpoint = isUpload 
+      ? `${YANDEX_API_BASE}/v1/disk/resources/upload?overwrite=true&path=${encodeURIComponent(targetPath)}`
+      : `${YANDEX_API_BASE}/v1/disk/resources/download?path=${encodeURIComponent(targetPath)}`;
+
+    // 1. Запрашиваем URL у Яндекса с добавлением серверного OAuth-токена
+    const yaRes = await fetch(endpoint, {
+      headers: { 'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+
+    if (!yaRes.ok) {
+      const errText = await yaRes.text();
+      return res.status(yaRes.status).send(errText);
+    }
+
+    const { href } = await yaRes.json();
+
+    // 2. Перенаправляем или загружаем данные
+    if (req.method === 'PUT') {
+      const uploadRes = await fetch(href, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body)
+      });
+      return res.status(uploadRes.status).json({ success: uploadRes.ok });
+    } else {
+      const downloadRes = await fetch(href);
+      if (!downloadRes.ok) return res.status(downloadRes.status).end();
+      const data = await downloadRes.json();
+      return res.json(data);
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Relay Server running on http://localhost:${PORT}`);
+});
