@@ -1,118 +1,538 @@
-// server.js — Бэкенд-сервер Relay с вынесенным токеном и авторизацией
-const express = require('express');
-const session = require('express-session');
-const cors = require('cors');
-const path = require('path');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// 🔒 СЕКРЕТНЫЙ ТОКЕН ЯНДЕКСА (Хранится ТОЛЬКО на сервере, F12 до него не доберется)
-const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN || "y0__wgBEMa2sf0IGP_1RSCBtIGxGCTcqP3i5Xi6F-JXhjOgxxUYVhg3";
-const YANDEX_API_BASE = "https://cloud-api.yandex.net";
-
-// Имитация БД пользователей (в продакшене используйте PostgreSQL/MongoDB)
-const usersDB = new Map();
-
-app.use(cors());
-app.use(express.json({ limit: '25mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.use(session({
-  secret: 'relay-super-secret-key-change-it',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 }
-}));
-
-// --- Middleware проверки авторизации ---
-function authRequired(req, res, next) {
-  if (req.session && req.session.user) {
-    return next();
-  }
-  return res.status(401).json({ error: "Unauthorized" });
-}
-
-// --- Роуты авторизации ---
-app.post('/api/auth/register', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: "Заполните все поля" });
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a0c">
   
-  const cleanUser = username.trim().toLowerCase();
-  if (usersDB.has(cleanUser)) return res.status(400).json({ error: "Пользователь уже существует" });
+  <!-- Apple iOS PWA Meta -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Relay">
 
-  usersDB.set(cleanUser, { username: cleanUser, password }); // В реальном проекте хэшируйте bcrypt
-  req.session.user = cleanUser;
-  res.json({ success: true, username: cleanUser });
-});
+  <!-- SVG App Icon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='120' fill='%230a0a0c'/%3E%3Ccircle cx='256' cy='256' r='180' fill='none' stroke='%231f1f24' stroke-width='8' stroke-dasharray='16 16'/%3E%3Cpath d='M180 370V140h110c45 0 75 25 75 65 0 32-18 53-48 62l58 103h-52l-52-95h-41v95h-50z' fill='none' stroke='%2310b981' stroke-width='36' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='180' cy='140' r='12' fill='%23ffffff'/%3E%3Ccircle cx='290' cy='140' r='10' fill='%2334d399'/%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='120' fill='%230a0a0c'/%3E%3Ccircle cx='256' cy='256' r='180' fill='none' stroke='%231f1f24' stroke-width='8' stroke-dasharray='16 16'/%3E%3Cpath d='M180 370V140h110c45 0 75 25 75 65 0 32-18 53-48 62l58 103h-52l-52-95h-41v95h-50z' fill='none' stroke='%2310b981' stroke-width='36' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='180' cy='140' r='12' fill='%23ffffff'/%3E%3Ccircle cx='290' cy='140' r='10' fill='%2334d399'/%3E%3C/svg%3E">
 
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  const cleanUser = (username || '').trim().toLowerCase();
-  const user = usersDB.get(cleanUser);
+  <title>Relay — Private Secure Messenger</title>
 
-  if (!user || user.password !== password) {
-    return res.status(401).json({ error: "Неверный логин или пароль" });
-  }
+  <style>
+    :root {
+      --bg-main: #0a0a0c;
+      --bg-card: #121216;
+      --bg-glass: rgba(18, 18, 22, 0.75);
+      --bg-bubble-my: #059669;
+      --bg-bubble-their: #1c1c22;
+      --accent: #10b981;
+      --accent-hover: #059669;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --text-main: #f4f4f5;
+      --text-muted: #8e8e93;
+      --border: rgba(255, 255, 255, 0.08);
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+    }
 
-  req.session.user = cleanUser;
-  res.json({ success: true, username: cleanUser });
-});
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; user-select: none; }
+    body { background: var(--bg-main); color: var(--text-main); display: flex; justify-content: center; align-items: center; min-height: 100dvh; height: 100dvh; overflow: hidden; }
 
-app.post('/api/auth/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
-});
+    /* App Shell */
+    #app-viewport { width: 100%; max-width: 900px; height: 100dvh; display: flex; flex-direction: column; background: var(--bg-card); position: relative; }
+    @media (min-width: 768px) {
+      #app-viewport { height: 92dvh; max-height: 880px; border-radius: var(--radius-lg); border: 1px solid var(--border); box-shadow: 0 30px 80px rgba(0,0,0,0.85); overflow: hidden; }
+    }
 
-app.get('/api/auth/me', (req, res) => {
-  if (req.session && req.session.user) {
-    res.json({ authenticated: true, username: req.session.user });
-  } else {
-    res.json({ authenticated: false });
-  }
-});
-
-// --- Безопасный Прокси к Яндекс Диску ---
-app.all('/api/storage/*', authRequired, async (req, res) => {
-  try {
-    const targetPath = req.params[0];
-    const isUpload = req.method === 'PUT' || req.query.type === 'upload';
+    /* Onboarding Hero Modal */
+    #hero-landing {
+      position: absolute; inset: 0; z-index: 100; background: var(--bg-main);
+      display: flex; flex-direction: column; justify-content: space-between; padding: 32px 24px;
+      animation: fadeIn 0.3s ease;
+    }
+    .hero-content { display: flex; flex-direction: column; align-items: center; text-align: center; margin: auto 0; }
+    .hero-badge { background: var(--accent-glow); color: var(--accent); font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(16, 185, 129, 0.3); margin-bottom: 20px; letter-spacing: 0.5px; text-transform: uppercase; }
+    .hero-title { font-size: 32px; font-weight: 800; tracking: -0.5px; line-height: 1.15; margin-bottom: 12px; background: linear-gradient(135deg, #fff 30%, #a1a1aa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero-desc { font-size: 15px; color: var(--text-muted); max-width: 440px; line-height: 1.5; margin-bottom: 32px; }
     
-    const endpoint = isUpload 
-      ? `${YANDEX_API_BASE}/v1/disk/resources/upload?overwrite=true&path=${encodeURIComponent(targetPath)}`
-      : `${YANDEX_API_BASE}/v1/disk/resources/download?path=${encodeURIComponent(targetPath)}`;
+    .hero-features { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; width: 100%; max-width: 480px; margin-bottom: 32px; text-align: left; }
+    .feat-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 14px; border-radius: var(--radius-md); }
+    .feat-card h4 { font-size: 13px; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .feat-card p { font-size: 11px; color: var(--text-muted); line-height: 1.3; }
 
-    // 1. Запрашиваем URL у Яндекса с добавлением серверного OAuth-токена
-    const yaRes = await fetch(endpoint, {
-      headers: { 'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
+    .hero-actions { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
 
-    if (!yaRes.ok) {
-      const errText = await yaRes.text();
-      return res.status(yaRes.status).send(errText);
+    /* Header & Footer Navigation */
+    header { padding: calc(14px + env(safe-area-inset-top, 0px)) 20px 14px; background: var(--bg-glass); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .status-indicator { position: relative; display: flex; align-items: center; justify-content: center; width: 10px; height: 10px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); transition: all 0.3s; }
+    .status-dot.online { background: #34d399; box-shadow: 0 0 12px var(--accent-glow); }
+    .status-dot.offline { background: #f59e0b; }
+    .status-dot.error { background: #ef4444; }
+
+    .brand-info h3 { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+    .brand-info span { font-size: 11px; color: var(--text-muted); }
+
+    .header-actions { display: flex; gap: 6px; }
+    .btn-icon { background: transparent; border: none; color: var(--text-muted); width: 36px; height: 36px; border-radius: 50%; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+    .btn-icon:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .btn-icon.danger:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+
+    /* Chat Area */
+    #chat-box { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; background: var(--bg-main); scroll-behavior: smooth; }
+    #chat-box::-webkit-scrollbar { width: 5px; }
+    #chat-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+    .msg-wrapper { display: flex; flex-direction: column; max-width: 78%; position: relative; animation: msgPop 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+    @keyframes msgPop { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .msg-wrapper.my { align-self: flex-end; }
+    .msg-wrapper.their { align-self: flex-start; }
+
+    .msg { padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.45; word-break: break-word; position: relative; box-shadow: 0 2px 8px rgba(0,0,0,0.15); user-select: text; }
+    .msg-wrapper.my .msg { background: var(--bg-bubble-my); color: #fff; border-bottom-right-radius: 4px; }
+    .msg-wrapper.their .msg { background: var(--bg-bubble-their); color: var(--text-main); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+
+    .msg-media { max-width: 100%; border-radius: 12px; margin-top: 8px; display: block; cursor: pointer; }
+    .msg-meta { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; opacity: 0.7; float: right; margin: 4px 0 -2px 10px; }
+    .ticks { font-size: 11px; font-weight: 700; cursor: pointer; }
+    .ticks.read { color: #a7f3d0; }
+
+    /* Controls & Inputs */
+    footer { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--bg-glass); backdrop-filter: blur(20px); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+    .input-row { display: flex; align-items: center; gap: 10px; }
+    
+    input[type="text"], input[type="password"] {
+      background: #15151a; border: 1px solid var(--border); color: #fff; padding: 13px 18px;
+      border-radius: var(--radius-md); outline: none; font-size: 14px; width: 100%; transition: all 0.2s; user-select: text;
     }
+    input[type="text"]:focus, input[type="password"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 
-    const { href } = await yaRes.json();
+    .btn-primary { background: var(--accent); color: #fff; border: none; padding: 13px 22px; border-radius: var(--radius-md); font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    .btn-secondary { background: rgba(255,255,255,0.06); color: #fff; border: 1px solid var(--border); padding: 13px 22px; border-radius: var(--radius-md); font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
 
-    // 2. Перенаправляем или загружаем данные
-    if (req.method === 'PUT') {
-      const uploadRes = await fetch(href, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req.body)
+    .attach-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-muted); }
+    .file-preview-chip { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(16,185,129,0.3); padding: 4px 10px; border-radius: 20px; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+
+    /* Modals */
+    .modal-overlay { position: absolute; inset: 0; background: rgba(10,10,12,0.85); backdrop-filter: blur(16px); padding: 24px; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; animation: fadeIn 0.2s ease; }
+    .modal-card { background: #16161c; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; width: 100%; max-width: 440px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); display: flex; flex-direction: column; gap: 16px; }
+    .hidden { display: none !important; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Auth Form Tabs */
+    .auth-tabs { display: flex; background: #15151a; border-radius: var(--radius-md); padding: 4px; border: 1px solid var(--border); }
+    .auth-tab { flex: 1; padding: 8px; text-align: center; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-radius: 12px; transition: all 0.2s; }
+    .auth-tab.active { background: var(--accent); color: #fff; }
+  </style>
+</head>
+<body oncontextmenu="return false;">
+
+  <div id="app-viewport">
+    
+    <!-- 1. Экран авторизации и регистрации -->
+    <div id="hero-landing">
+      <div></div>
+      <div class="hero-content">
+        <div class="hero-badge">⚡ Relay Protected Node</div>
+        <h1 class="hero-title">Защищенная связь.<br>Токен защищен на сервере.</h1>
+        <p class="hero-desc">Токены и ключи больше не хранятся в браузере. Все запросы проксируются через защищенный бэкенд.</p>
+        
+        <div class="hero-actions" style="width: 100%; max-width: 360px;">
+          <div class="auth-tabs">
+            <div id="tab-login" class="auth-tab active" onclick="switchAuthMode('login')">Вход</div>
+            <div id="tab-register" class="auth-tab" onclick="switchAuthMode('register')">Регистрация</div>
+          </div>
+
+          <div style="text-align: left; margin-top: 8px;">
+            <label style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">Логин:</label>
+            <input type="text" id="auth-username" placeholder="Ваш уникальный ник" maxlength="20">
+          </div>
+
+          <div style="text-align: left;">
+            <label style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">Пароль аккаунта:</label>
+            <input type="password" id="auth-password" placeholder="••••••••">
+          </div>
+
+          <button id="auth-submit-btn" class="btn-primary" onclick="handleAuthSubmit()" style="margin-top: 10px;">Войти в аккаунт</button>
+        </div>
+      </div>
+      <div style="text-align: center; font-size: 11px; color: var(--text-muted);">Relay Direct Protocol v6.5 • Server-Side Token Security</div>
+    </div>
+
+    <!-- 2. Окно настроек приватной комнаты -->
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <h2 style="font-size: 18px; font-weight: 700;">⚙️ Подключение к собеседнику</h2>
+        <div>
+          <label style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">Никнейм собеседника:</label>
+          <input type="text" id="peer-input" placeholder="Например: bob" maxlength="20">
+        </div>
+        <div>
+          <label style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px; display: block;">Пароль сквозного шифрования (E2EE):</label>
+          <input type="password" id="secret-input" value="1234" placeholder="Знаете только вы и собеседник">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 8px;">
+          <button class="btn-secondary" style="flex: 1;" onclick="toggleModal('settings-modal', false)">Отмена</button>
+          <button class="btn-primary" style="flex: 1;" onclick="saveRoomSettings()">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Окно просмотра медиа -->
+    <div id="media-modal" class="modal-overlay hidden" onclick="toggleModal('media-modal', false)">
+      <div id="media-modal-body" onclick="event.stopPropagation()"></div>
+    </div>
+
+    <!-- 4. Шапка приложения -->
+    <header>
+      <div class="brand">
+        <div class="status-indicator">
+          <div id="status-dot" class="status-dot"></div>
+        </div>
+        <div class="brand-info">
+          <h3 id="chat-title">Relay Chat</h3>
+          <span id="peer-status-text">Защищенное соединение</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button onclick="shareInviteLink()" class="btn-icon" title="Поделиться ссылкой">🔗</button>
+        <button onclick="clearChatHistory()" class="btn-icon danger" title="Очистить историю">🗑</button>
+        <button onclick="openSettings()" class="btn-icon" title="Настройки">⚙️</button>
+        <button onclick="logout()" class="btn-icon" title="Выйти">🚪</button>
+      </div>
+    </header>
+
+    <!-- 5. Область сообщений -->
+    <div id="chat-box"></div>
+
+    <!-- 6. Панель ввода -->
+    <footer>
+      <div class="attach-bar">
+        <button class="btn-icon" onclick="document.getElementById('file-input').click()" title="Прикрепить файл">📎</button>
+        <input type="file" id="file-input" class="hidden" onchange="handleFileSelect(event)">
+        <div id="file-preview-container" class="file-preview-chip hidden">
+          <span id="file-name-indicator"></span>
+          <span onclick="cancelFileSelect()" style="cursor: pointer; font-weight: bold;">✕</span>
+        </div>
+      </div>
+
+      <div class="input-row">
+        <input type="text" id="msg-input" placeholder="Напишите зашифрованное сообщение..." onkeydown="if(event.key==='Enter') handleSend()">
+        <button class="btn-primary" onclick="handleSend()">Отправить</button>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    // --- 🛡 Защита от открытий F12 и DevTools ---
+    (function antiDevTools() {
+      // 1. Блокировка сочетаний клавиш
+      document.addEventListener('keydown', function(e) {
+        if (
+          e.key === 'F12' ||
+          (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+          (e.ctrlKey && e.key === 'U')
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+        }
       });
-      return res.status(uploadRes.status).json({ success: uploadRes.ok });
-    } else {
-      const downloadRes = await fetch(href);
-      if (!downloadRes.ok) return res.status(downloadRes.status).end();
-      const data = await downloadRes.json();
-      return res.json(data);
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-app.listen(PORT, () => {
-  console.log(`Relay Server running on http://localhost:${PORT}`);
-});
+      // 2. Детектор DevTools через debugger-петлю
+      setInterval(function() {
+        const startTime = performance.now();
+        debugger;
+        const endTime = performance.now();
+        if (endTime - startTime > 100) {
+          document.body.innerHTML = "<div style='color:white;text-align:center;padding:50px;'>DevTools обнаружен. Доступ заблокирован в целях безопасности.</div>";
+        }
+      }, 1000);
+    })();
+
+    // --- Service Worker для PWA ---
+    if ('serviceWorker' in navigator) {
+      const swCode = `
+        const CACHE_NAME = 'relay-pwa-v6.5';
+        self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll([location.href]))); });
+        self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+        self.addEventListener('fetch', e => {
+          if (e.request.method !== 'GET') return;
+          e.respondWith(caches.match(e.request).then(c => c || fetch(e.request)));
+        });
+      `;
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
+    }
+
+    let db, cryptoKey, selectedFileData = null;
+    let authMode = 'login';
+    let currentUser = null;
+    let roomConfig = JSON.parse(localStorage.getItem('relay_room_cfg') || '{}');
+
+    const getChatId = (u1, u2) => [u1.toLowerCase(), u2.toLowerCase()].sort().join('_');
+    const escapeHtml = str => (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const toggleModal = (id, show) => document.getElementById(id).classList.toggle('hidden', !show);
+
+    // --- IndexedDB ---
+    const dbReq = indexedDB.open("RelayDB_v65", 1);
+    dbReq.onupgradeneeded = e => {
+      db = e.target.result;
+      if (!db.objectStoreNames.contains("messages")) {
+        db.createObjectStore("messages", { keyPath: "id" }).createIndex("chatId", "chatId", { unique: false });
+      }
+    };
+    dbReq.onsuccess = e => { db = e.target.result; checkServerSession(); };
+
+    function dbQuery(mode, callback) {
+      return new Promise(resolve => {
+        if (!db) return resolve([]);
+        const tx = db.transaction("messages", mode);
+        const store = tx.objectStore("messages");
+        const res = callback(store);
+        if (mode === "readonly" && res) res.onsuccess = () => resolve(res.result || []);
+        else tx.oncomplete = () => resolve(true);
+      });
+    }
+
+    const getAllFromDB = () => dbQuery("readonly", store => store.index("chatId").getAll(getChatId(currentUser, roomConfig.peer || '')));
+    const saveToDB = msg => { msg.chatId = getChatId(currentUser, roomConfig.peer || ''); return dbQuery("readwrite", store => store.put(msg)); };
+
+    // --- Авторизация и Серверные запросы ---
+    function switchAuthMode(mode) {
+      authMode = mode;
+      document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+      document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+      document.getElementById('auth-submit-btn').textContent = mode === 'login' ? 'Войти в аккаунт' : 'Зарегистрироваться';
+    }
+
+    async function handleAuthSubmit() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+      if (!username || !password) return alert("Заполните логин и пароль");
+
+      const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok) return alert(data.error || "Ошибка авторизации");
+
+      currentUser = data.username;
+      toggleModal('hero-landing', false);
+      initApp();
+    }
+
+    async function checkServerSession() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.authenticated) {
+          currentUser = data.username;
+          toggleModal('hero-landing', false);
+          initApp();
+        }
+      } catch (e) {}
+    }
+
+    async function logout() {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    // --- Настройки комнаты ---
+    function openSettings() {
+      document.getElementById('peer-input').value = roomConfig.peer || '';
+      document.getElementById('secret-input').value = roomConfig.secret || '1234';
+      toggleModal('settings-modal', true);
+    }
+
+    function saveRoomSettings() {
+      roomConfig.peer = document.getElementById('peer-input').value.trim().toLowerCase();
+      roomConfig.secret = document.getElementById('secret-input').value.trim();
+      if (!roomConfig.peer || !roomConfig.secret) return alert("Заполните все поля");
+
+      localStorage.setItem('relay_room_cfg', JSON.stringify(roomConfig));
+      toggleModal('settings-modal', false);
+      initApp();
+    }
+
+    async function initApp() {
+      if (!roomConfig.peer) {
+        openSettings();
+        return;
+      }
+
+      document.getElementById('chat-title').textContent = `@${roomConfig.peer}`;
+      cryptoKey = await deriveKey(roomConfig.secret);
+      await renderMessages();
+
+      syncWithProxyStorage();
+      clearInterval(window.syncInterval);
+      window.syncInterval = setInterval(syncWithProxyStorage, 4000);
+    }
+
+    // --- Клиентское Шифрование AES-256-GCM ---
+    async function deriveKey(secret) {
+      const enc = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(secret), "PBKDF2", false, ["deriveKey"]);
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: enc.encode("relay_v65_salt"), iterations: 50000, hash: "SHA-256" },
+        keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+      );
+    }
+
+    async function encrypt(text) {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, new TextEncoder().encode(text));
+      return { iv: Array.from(iv), data: Array.from(new Uint8Array(ciphertext)) };
+    }
+
+    async function decrypt(encrypted) {
+      try {
+        const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(encrypted.iv) }, cryptoKey, new Uint8Array(encrypted.data));
+        return new TextDecoder().decode(decrypted);
+      } catch { return null; }
+    }
+
+    // --- Сообщения и медиа ---
+    function handleFileSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 15 * 1024 * 1024) return alert("Файл должен быть меньше 15 МБ");
+
+      const reader = new FileReader();
+      reader.onload = evt => {
+        selectedFileData = { name: file.name, type: file.type, data: evt.target.result };
+        document.getElementById('file-name-indicator').textContent = file.name;
+        document.getElementById('file-preview-container').classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function cancelFileSelect() {
+      selectedFileData = null;
+      document.getElementById('file-input').value = '';
+      document.getElementById('file-preview-container').classList.add('hidden');
+    }
+
+    async function handleSend() {
+      const input = document.getElementById('msg-input');
+      const text = input.value.trim();
+      if (!text && !selectedFileData) return;
+
+      await saveToDB({
+        id: `${currentUser}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        timestamp: Date.now(),
+        sender: currentUser,
+        text, file: selectedFileData,
+        time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+      });
+
+      input.value = '';
+      cancelFileSelect();
+      await renderMessages();
+      syncWithProxyStorage();
+    }
+
+    async function renderMessages() {
+      const msgs = await getAllFromDB();
+      msgs.sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+
+      const box = document.getElementById('chat-box');
+      box.innerHTML = '';
+
+      msgs.forEach(m => {
+        const isMy = m.sender === currentUser;
+        const wrapper = document.createElement('div');
+        wrapper.className = `msg-wrapper ${isMy ? 'my' : 'their'}`;
+
+        let mediaHtml = '';
+        if (m.file) {
+          if (m.file.type.startsWith('image/')) mediaHtml = `<img src="${m.file.data}" class="msg-media" onclick="openMedia('${m.file.data}')">`;
+          else mediaHtml = `<a href="${m.file.data}" download="${m.file.name}" style="color:#34d399; font-size:12px; display:block; margin-top:4px;">📄 ${escapeHtml(m.file.name)}</a>`;
+        }
+
+        wrapper.innerHTML = `
+          <div class="msg">
+            ${escapeHtml(m.text)}
+            ${mediaHtml}
+            <div class="msg-meta">
+              <span>${m.time}</span>
+              ${isMy ? `<span class="ticks read">✓</span>` : ''}
+            </div>
+          </div>
+        `;
+        box.appendChild(wrapper);
+      });
+
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function openMedia(src) {
+      const body = document.getElementById('media-modal-body');
+      body.innerHTML = `<img src="${src}" style="max-width:100%; max-height:80vh; border-radius:12px;">`;
+      toggleModal('media-modal', true);
+    }
+
+    async function clearChatHistory() {
+      if (confirm("Очистить историю сообщений на этом устройстве?")) {
+        const msgs = await getAllFromDB();
+        await dbQuery("readwrite", store => msgs.forEach(m => store.delete(m.id)));
+        await renderMessages();
+      }
+    }
+
+    function shareInviteLink() {
+      const inviteUrl = `${window.location.origin}?peer=${currentUser}`;
+      navigator.clipboard.writeText(inviteUrl);
+      alert("Ссылка с вашим ником скопирована!");
+    }
+
+    // --- Безопасная Синхронизация через серверный прокси ---
+    async function syncWithProxyStorage() {
+      const dot = document.getElementById('status-dot');
+      if (!currentUser || !roomConfig.peer) return;
+
+      const myFile = `app:/RelayChat/direct_${currentUser}_${roomConfig.peer}.json`;
+      const peerFile = `app:/RelayChat/direct_${roomConfig.peer}_${currentUser}.json`;
+
+      try {
+        // 1. Скачиваем сообщения собеседника через БЭКЕНДПРОКСИ (Токен не светится!)
+        const peerRes = await fetch(`/api/storage/${peerFile}`);
+        if (peerRes.ok) {
+          const remoteData = await peerRes.json();
+          if (remoteData?.payload) {
+            const decryptedText = await decrypt(remoteData.payload);
+            if (decryptedText) {
+              const { messages: incomingMsgs = [] } = JSON.parse(decryptedText);
+              for (const m of incomingMsgs) await saveToDB(m);
+            }
+          }
+        }
+
+        // 2. Отправляем свои зашифрованные сообщения на бэкенд
+        const myMsgs = (await getAllFromDB()).filter(m => m.sender === currentUser);
+        const encryptedData = await encrypt(JSON.stringify({ sender: currentUser, updatedAt: Date.now(), messages: myMsgs }));
+
+        await fetch(`/api/storage/${myFile}?type=upload`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload: encryptedData })
+        });
+
+        await renderMessages();
+        dot.className = "status-dot online";
+      } catch {
+        dot.className = "status-dot error";
+      }
+    }
+  </script>
+</body>
+</html>
